@@ -136,11 +136,21 @@ class RFMClustering:
         except Exception as e:
             logging.error(f"Error saving results: {e}")
             raise
+        
+    def save_description_column(self, output_path):
+        try:
+            description_column = self.data[['Description']].dropna()
+            description_column.to_csv(output_path, index=False, header=True)
+            logging.info(f"'Description' column saved to {output_path}.")
+        except Exception as e:
+            logging.error(f"Error saving 'Description' column: {e}")
+            raise
 
     def execute(self, output_path):
         try:
             self.load_data()
             self.preprocess_data()
+            self.save_description_column('artifact/description.csv')  # Save 'Description' column
             self.create_rfm_table()
             self.handle_outliers()
             self.perform_clustering()
@@ -149,3 +159,4 @@ class RFMClustering:
         except Exception as e:
             logging.error(f"Error executing RFM clustering: {e}")
             raise
+
