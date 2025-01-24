@@ -1,7 +1,3 @@
-Certainly! A professional README file provides clear, concise, and organized information about your project. Here's a structured example for your E-Commerce Customer Segmentation project:
-
-* * *
-
 E-Commerce Customer Segmentation Project
 ========================================
 
