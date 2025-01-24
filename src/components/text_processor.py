@@ -1,97 +1,125 @@
-import re
+import os
 import pandas as pd
+import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from nltk.corpus import stopwords
-
-from dataclasses import dataclass
 from src.utils import save_object, load_object
+from src.logger import logging
+from src.exception import CustomException
+from dataclasses import dataclass
+import nltk
 
 @dataclass
 class TextProcessorConfig:
-    csv_file_path: str  # Path to the CSV file containing descriptions
-    pickle_file_path: str = "artifact/tfidf_vectorizer.pkl.gz"  # Path to save the TF-IDF vectorizer
-    column_name: str = "Description"  # Column containing the descriptions
-
+    vectors_file_path: str = os.path.join('artifact', "vectors.pkl")
+    df_file_path: str = os.path.join('artifact', "df.pkl")
+    vectorizer_file_path: str = os.path.join('artifact', "vectorizer.pkl")
 
 class TextProcessor:
-    def __init__(self, config: TextProcessorConfig):
-        self.config = config
-        self.vectorizer = None
-        self.tfidf_matrix = None
+    def __init__(self):
+        self.text_processor_config = TextProcessorConfig()
 
-    def custom_preprocessor(self, text: str) -> str:
+    def read_data(self):
         """
-        Preprocess text: make lowercase, remove non-alphabetic characters, and remove stopwords.
-
-        Args:
-            text (str): Input text.
-
-        Returns:
-            str: Cleaned text.
+        Reads the description.csv file for the 'Description' column.
         """
-        # Convert text to lowercase
-        text = text.lower()
-        # Remove non-alphabetic characters
-        text = re.sub(r"[^a-zA-Z\s]", "", text)
-        # Remove stopwords
-        stop_words = set(stopwords.words("english"))
-        text = " ".join(word for word in text.split() if word not in stop_words)
-        return text
+        try:
+            df = pd.read_csv("artifact/description.csv", usecols=['Description'])
+            logging.info("Description data read successfully.")
+            return df
+        except Exception as e:
+            logging.error("Error while reading the data.")
+            raise CustomException(e, sys)
 
-    def fit_and_save_vectorizer(self):
+    def preprocess_text(self, text):
         """
-        Fit the TF-IDF vectorizer on the descriptions column and save the model.
+        Cleans and preprocesses the text by:
+        - Removing non-alphabetic characters
+        - Converting to lowercase
+        - Removing stopwords
         """
-        # Load the CSV file
-        data = pd.read_csv(self.config.csv_file_path)
-        if self.config.column_name not in data.columns:
-            raise ValueError(f"Column '{self.config.column_name}' not found in the dataset.")
+        try:
+            # Ensure nltk stopwords are downloaded and set up
+            nltk.download('stopwords', quiet=True)
+            stop_words = set(stopwords.words('english'))
 
-        # Drop missing values
-        data = data.dropna(subset=[self.config.column_name])
+            # Remove non-alphabetic characters and convert to lowercase
+            text = re.sub(r'[^a-zA-Z\s]', '', text)
+            text = text.lower()
+            text = text.strip()
 
-        # Preprocess the descriptions
-        descriptions = data[self.config.column_name].apply(self.custom_preprocessor).tolist()
+            # Remove stopwords
+            text = " ".join([word for word in text.split() if word not in stop_words])
+            return text
+        except Exception as e:
+            logging.error("Error while preprocessing the text.")
+            raise CustomException(e, sys)
 
-        # Initialize and fit the TF-IDF vectorizer
-        self.vectorizer = TfidfVectorizer()
-        self.tfidf_matrix = self.vectorizer.fit_transform(descriptions)
-
-        # Save the vectorizer
-        save_object(self.config.pickle_file_path, self.vectorizer)
-        print(f"TF-IDF vectorizer saved at {self.config.pickle_file_path}")
-
-    def recommend_top_n(self, input_text: str, n: int = 3):
+    def process_and_vectorize(self):
         """
-        Recommend top N distinct descriptions based on cosine similarity.
-
-        Args:
-            input_text (str): Input text to compare.
-            n (int): Number of recommendations.
-
-        Returns:
-            List[str]: Top N recommended descriptions.
+        Preprocesses the data and converts it into vectors using TF-IDF.
         """
-        # Load the vectorizer
-        if not self.vectorizer:
-            self.vectorizer = load_object(self.config.pickle_file_path)
+        try:
+            # Read data
+            df = self.read_data()
+            
+            # Preprocess text
+            df['Processed_Description'] = df['Description'].apply(self.preprocess_text)
 
-        # Preprocess the input text
-        cleaned_text = self.custom_preprocessor(input_text)
+            # Vectorization using TF-IDF
+            vectorizer = TfidfVectorizer()
+            vectors = vectorizer.fit_transform(df['Processed_Description'])
 
-        # Transform the input text
-        input_vector = self.vectorizer.transform([cleaned_text])
+            # Save vectors and DataFrame
+            save_object(self.text_processor_config.vectors_file_path, vectors)
+            df.to_pickle(self.text_processor_config.df_file_path)
 
-        # Compute cosine similarity
-        cosine_similarities = cosine_similarity(input_vector, self.tfidf_matrix).flatten()
+            # Save the trained vectorizer
+            save_object(self.text_processor_config.vectorizer_file_path, vectorizer)
 
-        # Get indices of top N distinct recommendations
-        top_indices = cosine_similarities.argsort()[-n:][::-1]
+            logging.info("Vectors, DataFrame, and vectorizer saved successfully.")
 
-        # Return the top N recommendations
-        data = pd.read_csv(self.config.csv_file_path).dropna(subset=[self.config.column_name])
-        return data.iloc[top_indices][self.config.column_name].tolist()
+            return vectors, df, vectorizer
+        except Exception as e:
+            logging.error("Error during text processing and vectorization.")
+            raise CustomException(e, sys)
 
+    def recommend_for_new_description(self, new_description, vectors, df, vectorizer, top_n=3):
+        """
+        Recommends top_n similar descriptions to the new description based on cosine similarity.
+        """
+        try:
+            # Preprocess the new description
+            processed_description = self.preprocess_text(new_description)
 
-    
+            # Transform the new description using the same vectorizer
+            new_description_vector = vectorizer.transform([processed_description])
+
+            # Compute cosine similarity between the new description and existing vectors
+            similarity_scores = cosine_similarity(new_description_vector, vectors)
+
+            # Get indices of the top_n most similar descriptions
+            similar_indices = similarity_scores.argsort()[0][-top_n:][::-1]
+
+            # Get the top_n recommended descriptions (distinct)
+            recommendations = df.iloc[similar_indices]['Description'].unique().tolist()
+
+            logging.info(f"Recommendations for the new description: {recommendations}")
+            return recommendations
+        except Exception as e:
+            logging.error("Error during recommendation generation.")
+            raise CustomException(e, sys)
+
+    def load_data(self):
+        """
+        Loads the previously saved vectors, DataFrame, and vectorizer.
+        """
+        try:
+            vectors = load_object(self.text_processor_config.vectors_file_path)
+            df = pd.read_pickle(self.text_processor_config.df_file_path)
+            vectorizer = load_object(self.text_processor_config.vectorizer_file_path)
+            return vectors, df, vectorizer
+        except Exception as e:
+            logging.error("Error while loading vectors, DataFrame, and vectorizer.")
+            raise CustomException(e, sys)
